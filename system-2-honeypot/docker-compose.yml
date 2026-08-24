@@ -1,0 +1,106 @@
+# SYSTEM 2 — Honeypot / Security Sensor Server (8GB RAM target)
+#
+# Brings up every attack-collection component from the HoneyShield X plan:
+# Cowrie (SSH/Telnet), OpenCanary (HTTP/FTP/SMB/etc.), Dionaea (malware),
+# Zeek + Suricata (network detection), and Filebeat (log shipping to
+# System 1). tcpdump runs as a host-level systemd unit instead of a
+# container (see scripts/tcpdump.service) because raw packet capture on
+# the physical NIC is simpler and more reliable outside Docker's network
+# namespace on most setups — see README.md.
+#
+# IMPORTANT: honeypot ports must only be reachable from inside your
+# isolated lab VLAN / test network, never from a production or home
+# network interface. See NETWORK SEGMENTATION in the architecture diagram.
+
+services:
+  cowrie:
+    image: cowrie/cowrie:latest
+    container_name: hsx-cowrie
+    restart: unless-stopped
+    ports:
+      - "2222:2222"   # fake SSH
+      - "2223:2223"   # fake Telnet
+    volumes:
+      - ./cowrie/userdb.txt:/cowrie/cowrie-git/etc/userdb.txt:ro
+      - cowrie_logs:/cowrie/cowrie-git/var/log/cowrie
+      - cowrie_data:/cowrie/cowrie-git/var/lib/cowrie
+    networks: [honeypot_lab]
+
+  opencanary:
+    image: thinkst/opencanary:latest
+    container_name: hsx-opencanary
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # fake HTTP
+      - "2121:21"     # fake FTP
+      - "4450:445"    # fake SMB
+      - "3306:3306"   # fake MySQL
+    volumes:
+      - ./opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro
+      - opencanary_logs:/var/log/opencanary
+    networks: [honeypot_lab]
+
+  dionaea:
+    image: dinotools/dionaea:latest
+    container_name: hsx-dionaea
+    restart: unless-stopped
+    ports:
+      - "2121:21"
+      - "4455:445"
+      - "6969:69/udp"
+    volumes:
+      - dionaea_logs:/opt/dionaea/var/log/dionaea
+      - dionaea_binaries:/opt/dionaea/var/lib/dionaea/binaries
+    networks: [honeypot_lab]
+
+  zeek:
+    image: zeek/zeek:latest
+    container_name: hsx-zeek
+    restart: unless-stopped
+    network_mode: host  # needs to see raw traffic on the monitored interface
+    volumes:
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+      - zeek_logs:/usr/local/zeek/logs
+    command: ["zeek", "-i", "eth0", "local"]
+    cap_add: [NET_ADMIN, NET_RAW]
+
+  suricata:
+    image: jasonish/suricata:latest
+    container_name: hsx-suricata
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./suricata/local.rules:/etc/suricata/rules/local.rules:ro
+      - suricata_logs:/var/log/suricata
+    command: ["-i", "eth0"]
+    cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.13.0
+    container_name: hsx-filebeat
+    restart: unless-stopped
+    user: root
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - cowrie_logs:/logs/cowrie:ro
+      - opencanary_logs:/logs/opencanary:ro
+      - dionaea_logs:/logs/dionaea:ro
+      - zeek_logs:/logs/zeek:ro
+      - suricata_logs:/logs/suricata:ro
+    networks: [honeypot_lab]
+    depends_on: [cowrie, opencanary, dionaea, zeek, suricata]
+
+volumes:
+  cowrie_logs:
+  cowrie_data:
+  opencanary_logs:
+  dionaea_logs:
+  dionaea_binaries:
+  zeek_logs:
+  suricata_logs:
+
+networks:
+  honeypot_lab:
+    driver: bridge
+
+

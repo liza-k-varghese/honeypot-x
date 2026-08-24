@@ -1,0 +1,135 @@
+# ==============================================================================
+# HoneyShield X — System 1: SOC / Analysis / Intelligence Platform
+# ==============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hsx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-honeyshield}
+      POSTGRES_USER: ${POSTGRES_USER:-honeyshield}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - hsx_soc_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-honeyshield}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: hsx-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - hsx_soc_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: hsx-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-changeme}
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"   # Neo4j Browser UI
+      - "7687:7687"   # Bolt protocol
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - hsx_soc_net
+
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: hsx-opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - DISABLE_SECURITY_PLUGIN=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"   # OpenSearch REST API
+      - "9600:9600"   # Performance Analyzer
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    networks:
+      - hsx_soc_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hsx-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - reports_data:/opt/honeyshield/reports
+      - pcap_evidence_data:/opt/honeyshield/pcap-evidence
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opensearch:
+        condition: service_started
+      neo4j:
+        condition: service_started
+    networks:
+      - hsx_soc_net
+
+  ingestion:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hsx-ingestion
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.ingestion_worker"]
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - backend
+    networks:
+      - hsx_soc_net
+
+volumes:
+  postgres_data:
+  redis_data:
+  neo4j_data:
+  neo4j_logs:
+  opensearch_data:
+  reports_data:
+  pcap_evidence_data:
+
+networks:
+  hsx_soc_net:
+    driver: bridge

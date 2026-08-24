@@ -1,0 +1,31 @@
+# Custom Suricata rules — Group 3 (IDS Alert Collection) and Group 6
+# (Port-Scanning Detection). These supplement Suricata's default/ET-Open
+# ruleset (fetched separately via suricata-update — see README.md) with
+# rules specific to catching activity against HoneyShield X's own
+# honeypot services.
+#
+# Rule syntax reference: each rule fires an alert into eve.json, which
+# Filebeat ships to System 1's `suricata-alerts` OpenSearch index.
+
+# --- Reconnaissance ---
+alert tcp any any -> $HOME_NET any (msg:"HSX SYN port scan detected"; flags:S; threshold:type both, track by_src, count 20, seconds 10; sid:9000001; rev:1;)
+alert tcp any any -> $HOME_NET [21,22,23,80,445,3306] (msg:"HSX multi-port probe against honeypot services"; flow:to_server; threshold:type both, track by_src, count 5, seconds 30; sid:9000002; rev:1;)
+
+# --- Brute force against honeypot SSH/Telnet (Cowrie) ---
+alert tcp any any -> $HOME_NET 2222 (msg:"HSX repeated SSH connection attempts (possible brute force)"; flags:S; threshold:type both, track by_src, count 10, seconds 60; sid:9000010; rev:1;)
+alert tcp any any -> $HOME_NET 2223 (msg:"HSX repeated Telnet connection attempts (possible brute force)"; flags:S; threshold:type both, track by_src, count 10, seconds 60; sid:9000011; rev:1;)
+
+# --- Suspicious payloads seen against the fake HTTP service (OpenCanary) ---
+alert http any any -> $HOME_NET 8080 (msg:"HSX SQL injection attempt against honeypot HTTP service"; flow:to_server,established; http.uri; content:"union select"; nocase; sid:9000020; rev:1; classtype:web-application-attack;)
+alert http any any -> $HOME_NET 8080 (msg:"HSX path traversal attempt against honeypot HTTP service"; flow:to_server,established; http.uri; content:"../"; sid:9000021; rev:1; classtype:web-application-attack;)
+alert http any any -> $HOME_NET 8080 (msg:"HSX common vulnerability scanner user-agent"; flow:to_server,established; http.user_agent; content:"sqlmap"; nocase; sid:9000022; rev:1;)
+
+# --- Malware/exploit traffic toward the malware-interaction honeypot (Dionaea) ---
+alert tcp any any -> $HOME_NET 445 (msg:"HSX SMB connection to malware honeypot"; flow:to_server,established; sid:9000030; rev:1;)
+alert tcp any any -> $HOME_NET 69 (msg:"HSX TFTP connection to malware honeypot (possible payload staging)"; sid:9000031; rev:1;)
+
+# --- Outbound connections FROM a honeypot container (would indicate a
+#     genuine breakout / callback — should basically never fire) ---
+alert tcp $HOME_NET any -> !$HOME_NET any (msg:"HSX unexpected outbound connection from honeypot host — investigate immediately"; flow:to_server; sid:9000099; rev:1; priority:1;)
+
+

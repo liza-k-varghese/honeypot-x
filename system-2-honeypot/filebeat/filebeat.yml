@@ -1,0 +1,93 @@
+# Filebeat — Group 4 (Centralized Log Collection, Filebeat Integration,
+# Cowrie/OpenCanary/Dionaea/Zeek/Suricata Log Collection).
+#
+# Ships every honeypot/IDS log source from System 2 straight into
+# System 1's OpenSearch, using the exact index names the master plan
+# specifies (cowrie-logs, opencanary-logs, dionaea-logs, zeek-logs,
+# suricata-alerts). System 1's ingestion_worker.py polls these indices,
+# normalizes each source's different schema into one AttackEvent shape,
+# and writes to PostgreSQL — see system-1-soc/backend/app/services/log_normalization.py.
+
+filebeat.inputs:
+  - type: filestream
+    id: cowrie
+    paths: ["/logs/cowrie/cowrie.json*"]
+    fields: {honeyshield_source: cowrie}
+    fields_under_root: true
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+  - type: filestream
+    id: opencanary
+    paths: ["/logs/opencanary/opencanary.log*"]
+    fields: {honeyshield_source: opencanary}
+    fields_under_root: true
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+  - type: filestream
+    id: dionaea
+    paths: ["/logs/dionaea/dionaea.json*"]
+    fields: {honeyshield_source: dionaea}
+    fields_under_root: true
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+  - type: filestream
+    id: zeek
+    paths: ["/logs/zeek/current/*.log"]
+    fields: {honeyshield_source: zeek}
+    fields_under_root: true
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+  - type: filestream
+    id: suricata
+    paths: ["/logs/suricata/eve.json"]
+    fields: {honeyshield_source: suricata}
+    fields_under_root: true
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+# Route each source to its own index, matching the master plan's OpenSearch
+# index list. output.elasticsearch works unmodified against OpenSearch's
+# Elasticsearch-compatible API.
+output.elasticsearch:
+  hosts: ["${SYSTEM1_HOST:192.168.1.10}:9200"]
+  protocol: "https"
+  username: "${OPENSEARCH_USER:admin}"
+  password: "${OPENSEARCH_PASSWORD}"
+  ssl.verification_mode: "${OPENSEARCH_SSL_VERIFY:none}"
+  indices:
+    - index: "cowrie-logs-%{+yyyy.MM.dd}"
+      when.equals: {honeyshield_source: "cowrie"}
+    - index: "opencanary-logs-%{+yyyy.MM.dd}"
+      when.equals: {honeyshield_source: "opencanary"}
+    - index: "dionaea-logs-%{+yyyy.MM.dd}"
+      when.equals: {honeyshield_source: "dionaea"}
+    - index: "zeek-logs-%{+yyyy.MM.dd}"
+      when.equals: {honeyshield_source: "zeek"}
+    - index: "suricata-alerts-%{+yyyy.MM.dd}"
+      when.equals: {honeyshield_source: "suricata"}
+
+setup.template.enabled: false
+setup.ilm.enabled: false
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+
+
